@@ -1,4 +1,4 @@
-// ShuttleMidi sends MIDI events for the Contour ShuttleProv2
+// ShuttleMidi sends MIDI events for the Contour ShuttleProV2
 
 package main
 
@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"shuttleMidi/devices"
-	"shuttleMidi/icon"
+	"github.com/awitez/shuttleMidi/devices"
+	"github.com/awitez/shuttleMidi/icon"
 
-	"golang.org/x/exp/slog"
+	"log/slog"
 
 	"fyne.io/systray"
 	"github.com/gen2brain/dlgs"
@@ -19,7 +19,7 @@ import (
 // quitCh is the channel used to stop the goroutine handling the ShuttlePro events
 var (
 	quitCh   chan struct{}
-	mControl devices.MidiController
+	mControl midiController
 )
 
 // initSettings initializes the settings engine Viper. If it doesn't exist it is automatically created using the defaults
@@ -48,7 +48,10 @@ func initSettings() error {
 }
 
 // refreshDisplay transmits all values to the display device (Mackie Control)
-func refreshDisplay() { // TODO: program solo state
+func refreshDisplay(device string) { // TODO:  make solo state blink
+	if !viper.GetBool("useDisplay") {
+		return
+	}
 	textUpperRow := ""
 	for i := range csPro {
 		if csPro[i].latch {
@@ -72,9 +75,9 @@ func refreshDisplay() { // TODO: program solo state
 	}
 	textLowerRow = textLowerRow + headPhoneVolTable[uint8(headPhoneVolume)]
 
-	devices.DisplayLCDtext(csPro[LRbutton].LCDchannel, upperRow, textUpperRow)
+	devices.DisplayLCDtext(device, csPro[LRbutton].LCDchannel, upperRow, textUpperRow)
 	time.Sleep(displayRowsDelay * time.Millisecond) // wait a little bit, MCU device might be 'overwhelmed'
-	devices.DisplayLCDtext(csPro[LRbutton].LCDchannel, lowerRow, textLowerRow)
+	devices.DisplayLCDtext(device, csPro[LRbutton].LCDchannel, lowerRow, textLowerRow)
 }
 
 // onReady is called by systray once the system tray menu can be created. It inializes the menu and opens the ShuttlePro device
@@ -90,7 +93,7 @@ func onReady() {
 		systray.Quit()
 	}
 
-	MIDIdevices, err := devices.GetMIDIDevices(nil)
+	MIDIdevices, err := getMIDIDevices(nil)
 	if err != nil {
 		slog.Error("devices: can't get MIDIdevices", err)
 	}
@@ -112,6 +115,9 @@ func onReady() {
 	systray.AddSeparator()
 	mRefreshDisplayItem := systray.AddMenuItem("Refresh Display", "")
 	mUseDisplayItem := systray.AddMenuItemCheckbox("Use Display", "", viper.GetBool("useDisplay"))
+
+	systray.AddSeparator()
+	mUseMediaKeys := systray.AddMenuItemCheckbox("Control Music.app", "", viper.GetBool("useMediaKeys"))
 
 	systray.AddSeparator()
 	mQuitItem := systray.AddMenuItem("Quit", "")
@@ -151,22 +157,32 @@ func onReady() {
 		}()
 	}
 
-	go func() {
+	go func() { // loop for menu items: 'Refresh Display' + 'Use Display' + 'Control Music.app'
 		for {
 			select {
 			case <-mRefreshDisplayItem.ClickedCh:
-				refreshDisplay()
+				refreshDisplay(viper.GetString("displayMidiDevice"))
 			case <-mUseDisplayItem.ClickedCh:
 				if mUseDisplayItem.Checked() {
 					mUseDisplayItem.Uncheck()
 					viper.Set("useDisplay", false)
 					viper.WriteConfig()
-					devices.ClearDisplay(csPro[LRbutton].LCDchannel)
+					devices.ClearDisplay(viper.GetString("displayMidiDevice"), csPro[LRbutton].LCDchannel)
 				} else {
 					mUseDisplayItem.Check()
 					viper.Set("useDisplay", true)
 					viper.WriteConfig()
-					refreshDisplay()
+					refreshDisplay(viper.GetString("displayMidiDevice"))
+				}
+			case <-mUseMediaKeys.ClickedCh:
+				if mUseMediaKeys.Checked() {
+					mUseMediaKeys.Uncheck()
+					viper.Set("useMediaKeys", false)
+					viper.WriteConfig()
+				} else {
+					mUseMediaKeys.Check()
+					viper.Set("useMediaKeys", true)
+					viper.WriteConfig()
 				}
 			case <-menuExit:
 				return
@@ -174,7 +190,7 @@ func onReady() {
 		}
 	}()
 
-	go func() {
+	go func() { // loop for menu item 'Quit'
 		<-mQuitItem.ClickedCh
 		close(quitCh)   // quit readShuttle go routine
 		close(menuExit) // quit go routines for menu items
@@ -189,20 +205,20 @@ func onReady() {
 func startListeners(midiName string, shuttlePro *devices.ShuttleProV2) {
 	if quitCh != nil {
 		close(quitCh)
-		mControl.Close()
+		mControl.close()
 	}
 	quitCh = make(chan struct{})
 
-	mControl = devices.NewMIDIController(nil, midiName, messageRepeatDelay*time.Millisecond, 0)
-	if err := mControl.Open(); err != nil {
+	mControl = newMIDIController(nil, midiName, messageRepeatDelay*time.Millisecond, 0)
+	if err := mControl.open(); err != nil {
 		dlgs.Error(applicationName, "Unable to open MIDI device. Please select the correct device in the context menu.\n"+err.Error())
 	} else {
 		// init: send defaults to midi device
 		if viper.GetBool("useDisplay") {
-			refreshDisplay()
+			refreshDisplay(viper.GetString("displayMidiDevice"))
 		}
-		mControl.SendCommand(mainVolumeCC, uint8(mainVolume), false)
-		mControl.SendCommand(headPhoneVolumeCC, uint8(headPhoneVolume), false)
+		mControl.sendCommand(mainVolumeCC, uint8(mainVolume), false)
+		mControl.sendCommand(headPhoneVolumeCC, uint8(headPhoneVolume), false)
 
 		go readShuttle(quitCh, shuttlePro, mControl)
 	}
@@ -210,39 +226,47 @@ func startListeners(midiName string, shuttlePro *devices.ShuttleProV2) {
 
 // readShuttle is the goroutine used to handle all ShuttlePro events and to send out the MIDI messages.
 // The routine is stopped by closing the quitch channel
-func readShuttle(quitCh chan struct{}, shuttlePro *devices.ShuttleProV2, midiController devices.MidiController) {
+func readShuttle(quitCh chan struct{}, shuttlePro *devices.ShuttleProV2, midiController midiController) {
 
 	// doButton executes the MIDI command and changes the display text for the given button
 	doButton := func(buttonNumber int, buttonCommand int) {
 		switch buttonCommand {
 		case on:
-			midiController.SendCommand(csPro[buttonNumber].cc, CCvalueOn, false)
+			midiController.sendCommand(csPro[buttonNumber].cc, CCvalueOn, false)
 			if csPro[buttonNumber].msgOn != "" {
 				if csPro[buttonNumber].LCDchannel != 0 {
-					devices.DisplayLCDtext(csPro[buttonNumber].LCDchannel, csPro[buttonNumber].LCDrow, csPro[buttonNumber].msgOn)
+					if viper.GetBool("useDisplay") {
+						devices.DisplayLCDtext(viper.GetString("displayMidiDevice"), csPro[buttonNumber].LCDchannel, csPro[buttonNumber].LCDrow, csPro[buttonNumber].msgOn)
+					}
 				}
 			}
 		case off:
-			midiController.SendCommand(csPro[buttonNumber].cc, CCvalueOff, false)
+			midiController.sendCommand(csPro[buttonNumber].cc, CCvalueOff, false)
 			if csPro[buttonNumber].msgOff != "" {
 				if csPro[buttonNumber].LCDchannel != 0 {
-					devices.DisplayLCDtext(csPro[buttonNumber].LCDchannel, csPro[buttonNumber].LCDrow, csPro[buttonNumber].msgOff)
+					if viper.GetBool("useDisplay") {
+						devices.DisplayLCDtext(viper.GetString("displayMidiDevice"), csPro[buttonNumber].LCDchannel, csPro[buttonNumber].LCDrow, csPro[buttonNumber].msgOff)
+					}
 				}
 			}
 		case toggle:
 			if csPro[buttonNumber].latch {
 				if csPro[buttonNumber].state {
-					midiController.SendCommand(csPro[buttonNumber].cc, CCvalueOff, false)
+					midiController.sendCommand(csPro[buttonNumber].cc, CCvalueOff, false)
 					if csPro[buttonNumber].msgOff != "" {
 						if csPro[buttonNumber].LCDchannel != 0 {
-							devices.DisplayLCDtext(csPro[buttonNumber].LCDchannel, csPro[buttonNumber].LCDrow, csPro[buttonNumber].msgOff)
+							if viper.GetBool("useDisplay") {
+								devices.DisplayLCDtext(viper.GetString("displayMidiDevice"), csPro[buttonNumber].LCDchannel, csPro[buttonNumber].LCDrow, csPro[buttonNumber].msgOff)
+							}
 						}
 					}
 				} else {
-					midiController.SendCommand(csPro[buttonNumber].cc, CCvalueOn, false)
+					midiController.sendCommand(csPro[buttonNumber].cc, CCvalueOn, false)
 					if csPro[buttonNumber].msgOn != "" {
 						if csPro[buttonNumber].LCDchannel != 0 {
-							devices.DisplayLCDtext(csPro[buttonNumber].LCDchannel, csPro[buttonNumber].LCDrow, csPro[buttonNumber].msgOn)
+							if viper.GetBool("useDisplay") {
+								devices.DisplayLCDtext(viper.GetString("displayMidiDevice"), csPro[buttonNumber].LCDchannel, csPro[buttonNumber].LCDrow, csPro[buttonNumber].msgOn)
+							}
 						}
 					}
 				}
@@ -278,12 +302,12 @@ func readShuttle(quitCh chan struct{}, shuttlePro *devices.ShuttleProV2, midiCon
 		case wp := <-shuttlePro.WheelPosition:
 			if wp > 0 && wp <= 7 {
 				// Invert positive wheel positions
-				midiController.SendCommand(0, uint8(18*(8-wp)), true)
+				midiController.sendCommand(0, uint8(18*(8-wp)), true)
 			} else if wp >= -7 && wp < 0 {
-				midiController.SendCommand(1, uint8(18*(-wp)), true)
+				midiController.sendCommand(1, uint8(18*(-wp)), true)
 			} else {
-				midiController.SendCommand(0, 255, false)
-				midiController.SendCommand(1, 255, false)
+				midiController.sendCommand(0, 255, false)
+				midiController.sendCommand(1, 255, false)
 			}
 		case dd := <-shuttlePro.DialDirection:
 			if dd == 1 { // clockwise: increase value
@@ -292,29 +316,37 @@ func readShuttle(quitCh chan struct{}, shuttlePro *devices.ShuttleProV2, midiCon
 					if headPhoneVolume > 127 {
 						headPhoneVolume = 127
 					}
-					devices.DisplayLCDtext(csPro[headPhoneButton].LCDchannel, lowerRow, headPhoneVolTable[uint8(headPhoneVolume)])
-					midiController.SendCommand(headPhoneVolumeCC, uint8(headPhoneVolume), false)
+					if viper.GetBool("useDisplay") {
+						devices.DisplayLCDtext(viper.GetString("displayMidiDevice"), csPro[headPhoneButton].LCDchannel, lowerRow, headPhoneVolTable[uint8(headPhoneVolume)])
+					}
+					midiController.sendCommand(headPhoneVolumeCC, uint8(headPhoneVolume), false)
 				} else { // headPhones off
 					mainVolume = mainVolume + mainVolumeDelta
 					if mainVolume > 127 {
 						mainVolume = 127
 					}
-					devices.DisplayLCDtext(csPro[LRbutton].LCDchannel, lowerRow, mainVolTable[uint8(mainVolume)])
-					midiController.SendCommand(mainVolumeCC, uint8(mainVolume), false)
+					if viper.GetBool("useDisplay") {
+						devices.DisplayLCDtext(viper.GetString("displayMidiDevice"), csPro[LRbutton].LCDchannel, lowerRow, mainVolTable[uint8(mainVolume)])
+					}
+					midiController.sendCommand(mainVolumeCC, uint8(mainVolume), false)
 				}
 			} else { // counter clockwise: decrease value
 				if csPro[headPhoneButton].state { // headPhones on
 					if headPhoneVolume > 0 {
 						headPhoneVolume = headPhoneVolume - headPhoneVolumeDelta
 					}
-					devices.DisplayLCDtext(csPro[headPhoneButton].LCDchannel, lowerRow, headPhoneVolTable[uint8(headPhoneVolume)])
-					midiController.SendCommand(headPhoneVolumeCC, uint8(headPhoneVolume), false)
+					if viper.GetBool("useDisplay") {
+						devices.DisplayLCDtext(viper.GetString("displayMidiDevice"), csPro[headPhoneButton].LCDchannel, lowerRow, headPhoneVolTable[uint8(headPhoneVolume)])
+					}
+					midiController.sendCommand(headPhoneVolumeCC, uint8(headPhoneVolume), false)
 				} else {
 					if mainVolume > 0 {
 						mainVolume = mainVolume - mainVolumeDelta
 					}
-					devices.DisplayLCDtext(csPro[LRbutton].LCDchannel, lowerRow, mainVolTable[uint(mainVolume)])
-					midiController.SendCommand(mainVolumeCC, uint8(mainVolume), false)
+					if viper.GetBool("useDisplay") {
+						devices.DisplayLCDtext(viper.GetString("displayMidiDevice"), csPro[LRbutton].LCDchannel, lowerRow, mainVolTable[uint8(mainVolume)])
+					}
+					midiController.sendCommand(mainVolumeCC, uint8(mainVolume), false)
 				}
 			}
 		case b0 := <-shuttlePro.Button1Pressed: // only toggle main if headPhones are off
@@ -350,20 +382,36 @@ func readShuttle(quitCh chan struct{}, shuttlePro *devices.ShuttleProV2, midiCon
 				}
 				doButton(headPhoneButton, toggle)
 			}
-		case b4 := <-shuttlePro.Button5Pressed:
+		case b4 := <-shuttlePro.Button5Pressed: // previous
 			if b4 {
+				if viper.GetBool("useMediaKeys") {
+					sendMediaKey(previous)
+					break
+				}
 				doButton(4, on)
 			}
-		case b5 := <-shuttlePro.Button6Pressed:
+		case b5 := <-shuttlePro.Button6Pressed: // next
 			if b5 {
+				if viper.GetBool("useMediaKeys") {
+					sendMediaKey(next)
+					break
+				}
 				doButton(5, on)
 			}
-		case b6 := <-shuttlePro.Button7Pressed:
+		case b6 := <-shuttlePro.Button7Pressed: // stop
 			if b6 {
+				if viper.GetBool("useMediaKeys") {
+					sendMediaKey(stop)
+					break
+				}
 				doButton(6, on)
 			}
-		case b7 := <-shuttlePro.Button8Pressed:
+		case b7 := <-shuttlePro.Button8Pressed: // play
 			if b7 {
+				if viper.GetBool("useMediaKeys") {
+					sendMediaKey(play)
+					break
+				}
 				doButton(7, on)
 			}
 		case b8 := <-shuttlePro.Button9Pressed:
@@ -408,7 +456,7 @@ func readShuttle(quitCh chan struct{}, shuttlePro *devices.ShuttleProV2, midiCon
 // onExit is called by systray on exit and closes the MidiController
 func onExit() {
 	if mControl != nil {
-		mControl.Close()
+		mControl.close()
 	}
 }
 

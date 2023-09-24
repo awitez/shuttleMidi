@@ -4,7 +4,7 @@ import (
 	"errors"
 
 	//"github.com/bearsh/hid"
-	"shuttleMidi/hid" // local
+	"github.com/awitez/shuttleMidi/hid" // local
 )
 
 // USB HID device information
@@ -185,8 +185,8 @@ func NewShuttleProV2() (*ShuttleProV2, error) {
 		return nil, ErrShuttleProV2DeviceNotFound
 	}
 
-	dev, err := deviceInfo[0].Open() // unable to open first ShuttleProV2
-	if err != nil {
+	dev, err := deviceInfo[0].Open()
+	if err != nil { // unable to open first ShuttleProV2
 		return nil, err
 	}
 
