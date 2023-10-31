@@ -5,6 +5,15 @@ import (
 	"os/exec"
 )
 
+const (
+
+	// MediaKeys
+	previous = 0
+	next     = 1
+	stop     = 2
+	play     = 3
+)
+
 // sendMediaKey sends a play, pause or skip command to the Apple Music.app
 func sendMediaKey(command int) {
 	cmdString := "osascript -e 'tell application \"Music\" to "
@@ -24,6 +33,6 @@ func sendMediaKey(command int) {
 	}
 	cmd := exec.Command("bash", "-c", cmdString)
 	if err := cmd.Run(); err != nil {
-		slog.Error("can't run 'osascript'", err)
+		slog.Error("can't run 'osascript' ", err)
 	}
 }

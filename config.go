@@ -21,12 +21,6 @@ const (
 	on     = 1
 	toggle = 2
 
-	// MediaKeys
-	previous = 0
-	next     = 1
-	stop     = 2
-	play     = 3
-
 	upperRow = 0
 	lowerRow = 56 // offset for lower LCD row
 

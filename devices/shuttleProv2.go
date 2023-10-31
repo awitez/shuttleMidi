@@ -3,8 +3,8 @@ package devices
 import (
 	"errors"
 
-	//"github.com/bearsh/hid"
-	"github.com/awitez/shuttleMidi/hid" // local
+	"github.com/bearsh/hid"
+	//"github.com/awitez/shuttleMidi/hid" // local
 )
 
 // USB HID device information
@@ -199,4 +199,19 @@ func NewShuttleProV2() (*ShuttleProV2, error) {
 	}
 	go sp.readDevice()
 	return sp, nil
+}
+
+func ReOpenShuttleProV2(sp *ShuttleProV2) error {
+	sp.devHandle.Close()
+	deviceInfo := hid.Enumerate(shuttleProV2VendorId, shuttleProV2ProductId)
+	if len(deviceInfo) == 0 {
+		return ErrShuttleProV2DeviceNotFound
+	}
+	dev, err := deviceInfo[0].Open()
+	if err != nil { // unable to open first ShuttleProV2
+		return err
+	}
+	sp.devHandle = dev
+	go sp.readDevice()
+	return nil
 }

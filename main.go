@@ -113,6 +113,7 @@ func onReady() {
 	mDisplayMIDISubItems := make([]*systray.MenuItem, 0, len(MIDIdevices))
 
 	systray.AddSeparator()
+	mReconnectShuttle := systray.AddMenuItem("Reconnect Shuttle", "")
 	mRefreshDisplayItem := systray.AddMenuItem("Refresh Display", "")
 	mUseDisplayItem := systray.AddMenuItemCheckbox("Use Display", "", viper.GetBool("useDisplay"))
 
@@ -160,6 +161,12 @@ func onReady() {
 	go func() { // loop for menu items: 'Refresh Display' + 'Use Display' + 'Control Music.app'
 		for {
 			select {
+			case <-mReconnectShuttle.ClickedCh:
+				slog.Info("trying to reconnect ShuttlePro")
+				err = devices.ReOpenShuttleProV2(shuttlePro)
+				if err != nil {
+					dlgs.Error(applicationName, err.Error())
+				}
 			case <-mRefreshDisplayItem.ClickedCh:
 				refreshDisplay(viper.GetString("displayMidiDevice"))
 			case <-mUseDisplayItem.ClickedCh:
