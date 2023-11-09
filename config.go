@@ -28,6 +28,16 @@ const (
 	messageRepeatDelay = 300
 	// delay in milliseconds between sending upper & lower row of text to MCU device
 	displayRowsDelay = 400
+
+	// colors for X-Touch LCD
+	black   = "00"
+	red     = "01"
+	green   = "02"
+	yellow  = "03"
+	blue    = "04"
+	magenta = "05"
+	cyan    = "06"
+	white   = "07"
 )
 
 var (
@@ -113,7 +123,7 @@ var csPro [15]button = [15]button{
 		LCDrow:     lowerRow,
 	},
 	{ // 02 LsRs
-		state:      true,
+		state:      false,
 		cc:         72,
 		latch:      true,
 		msgOn:      "LRs on ",

@@ -12,3 +12,5 @@ As you can see on the pic below I use it as my audio monitor controller in conju
 ![ReaLearn](ReaLearn.png)
 
 ![Reaper](Reaper.jpg)
+
+![X-Touch](x-touch-yellow.jpg)

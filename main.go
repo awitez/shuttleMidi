@@ -52,6 +52,8 @@ func refreshDisplay(device string) { // TODO:  make solo state blink
 	if !viper.GetBool("useDisplay") {
 		return
 	}
+	devices.InitColor(device, yellow)
+
 	textUpperRow := ""
 	for i := range csPro {
 		if csPro[i].latch {
